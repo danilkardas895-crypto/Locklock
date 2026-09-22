@@ -53,6 +53,14 @@ class AppLockActivity : ComponentActivity() {
                     LockScreen(lockedPackage,isChangePin, onUnlocked = {
                         // Unlock logic
                         isUnlocked = true
+                        // SECURITY/STABILITY FIX: release the camera BEFORE
+                        // tearing down the screen. Leaving this until
+                        // onDestroy() was too late — finishAffinity() starts
+                        // destroying the view hierarchy (including the hidden
+                        // camera preview) while CameraX was still actively
+                        // streaming to it, which crashed the app on unlock
+                        // whenever Intruder Photo was enabled.
+                        intruderCapture?.unbind()
                         val intent = Intent(INTENT_ACTION_APP_UNLOCKED).apply {
                             putExtra("packageName", lockedPackage)
                         }
@@ -62,6 +70,7 @@ class AppLockActivity : ComponentActivity() {
                     },
                         onPinChanged = {
                             isUnlocked = true
+                            intruderCapture?.unbind()
                             finish()
                             Toast.makeText(this, "Passcode Change Success", Toast.LENGTH_SHORT).show()
                         },
@@ -86,17 +95,6 @@ class AppLockActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         if (!isUnlocked) {
-            // SECURITY FIX: previously this called finish() unconditionally.
-            // That meant leaving this screen for ANY reason (Home, Recents,
-            // notification shade, an incoming call, the screen turning off...)
-            // closed the lock screen WITHOUT the passcode ever being checked,
-            // exposing the locked app underneath the moment you came back to it.
-            //
-            // Now: if the passcode hasn't been verified, we just push the whole
-            // task to the background instead of destroying this Activity. The
-            // lock screen stays alive (still showing "Enter Passcode", nothing
-            // unlocked) and will be exactly what the user sees again if this
-            // task ever resurfaces.
             moveTaskToBack(true)
         } else {
             finish()
@@ -112,10 +110,7 @@ class AppLockActivity : ComponentActivity() {
 /**
  * Binds a headless (invisible) front-camera session for the lifetime of this
  * composable, and hands the ready [IntruderCameraCapture] back via [onReady]
- * once CameraX has finished initializing. Renders a real — just visually
- * hidden — 1x1dp [PreviewView], since CameraX needs an actual surface to
- * bind to on most devices; nothing is ever shown to whoever is looking at
- * the screen.
+ * once CameraX has finished initializing.
  */
 @Composable
 private fun IntruderCaptureHost(onReady: (IntruderCameraCapture) -> Unit) {
